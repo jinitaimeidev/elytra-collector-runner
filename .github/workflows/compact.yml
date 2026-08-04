@@ -1,0 +1,62 @@
+# Weekly maintenance: squash the data repo and keep the runner repo alive.
+#
+# The collector makes ~288 commits/day in the data repo. Every file is a
+# full snapshot (daily history partitions are append-only whole files), so
+# the commit history behind HEAD carries no information — this job rewrites
+# main to a single commit weekly to cap repo growth.
+#
+# It also pushes a timestamp file to THIS runner repo. GitHub disables
+# scheduled workflows in public repos after 60 days without repository
+# activity; the weekly push resets that clock so collection never silently
+# stops.
+name: compact
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: data-repo-writer
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  squash-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout dataset (write key)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: jinitaimeidev/elytra-quant-data
+          ssh-key: ${{ secrets.DATA_DEPLOY_KEY }}
+          path: data
+
+      - name: Squash to a single commit
+        run: |
+          cd data
+          git config user.name "elytra-collector"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -q --orphan compact
+          git add -A
+          git commit -q -m "compact"
+          git branch -M compact main
+          git push -q --force origin main
+
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Push activity marker
+        run: |
+          git config user.name "elytra-collector"
+          git config user.email "actions@users.noreply.github.com"
+          date -u +%Y-%m-%dT%H:%M:%SZ > LAST_ALIVE
+          git add LAST_ALIVE
+          git diff --cached --quiet && exit 0
+          git commit -q -m "keepalive"
+          git push -q

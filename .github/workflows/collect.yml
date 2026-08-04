@@ -1,0 +1,65 @@
+# Git-scraping collector: one short Donut poll every ~5 minutes.
+#
+# This workflow lives in a PUBLIC repo so scheduled minutes are free, but it
+# holds no logic, no data, and no strategy code. Credential blast radius is
+# split across two deploy keys:
+#   CODE_DEPLOY_KEY  read-only  -> jinitaimeidev/elytra-quant-collector (code)
+#   DATA_DEPLOY_KEY  writable   -> jinitaimeidev/elytra-quant-data      (data)
+# A compromise of this repo's secrets can therefore read collector code and
+# write market ticks, but can never modify the collector or strategy source.
+#
+# Runner logs are public: elytra_quant_actions.py prints liveness counters
+# only (never the floor, never error bodies), and every step here is quiet.
+name: collect
+
+on:
+  schedule:
+    # Offbeat minutes: the :00/:05 grid is where GitHub's cron queue is most
+    # delayed. 3-58/5 keeps the 5-minute cadence with less jitter.
+    - cron: "3-58/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: data-repo-writer
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Checkout collector code (read-only key)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: jinitaimeidev/elytra-quant-collector
+          ssh-key: ${{ secrets.CODE_DEPLOY_KEY }}
+          path: code
+
+      - name: Checkout dataset (write key)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: jinitaimeidev/elytra-quant-data
+          ssh-key: ${{ secrets.DATA_DEPLOY_KEY }}
+          path: data
+
+      - name: Poll Donut once
+        env:
+          DONUTSMP_API_KEY: ${{ secrets.DONUTSMP_API_KEY }}
+        run: python3 code/elytra_quant_actions.py --data-dir data
+
+      - name: Commit and push tick
+        run: |
+          cd data
+          git config user.name "elytra-collector"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -q -m "tick"
+          # A delayed previous cron can race this push; rebase and retry.
+          for attempt in 1 2 3; do
+            git push -q && exit 0
+            git pull -q --rebase
+          done
+          exit 1
