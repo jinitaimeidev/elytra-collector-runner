@@ -1,3 +1,8 @@
+# Identical twin of collect.yml on an offset cron grid. GitHub's
+# scheduler throttles new/quiet schedules heavily; if that tracking
+# is per-workflow, two grids give twice the chances. Safe because
+# both share the data-repo-writer concurrency group and ticks merge
+# with dedupe.
 # Git-scraping collector: one short Donut poll every ~5 minutes.
 #
 # This workflow lives in a PUBLIC repo so scheduled minutes are free, but it
@@ -10,13 +15,13 @@
 #
 # Runner logs are public: elytra_quant_actions.py prints liveness counters
 # only (never the floor, never error bodies), and every step here is quiet.
-name: collect
+name: collect-b
 
 on:
   schedule:
     # Offbeat minutes: the :00/:05 grid is where GitHub's cron queue is most
     # delayed. 3-58/5 keeps the 5-minute cadence with less jitter.
-    - cron: "3-58/5 * * * *"
+    - cron: "1-56/5 * * * *"
   workflow_dispatch:
 
 concurrency:
